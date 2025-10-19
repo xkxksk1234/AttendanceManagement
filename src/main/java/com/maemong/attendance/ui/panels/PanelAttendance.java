@@ -3,6 +3,7 @@ package com.maemong.attendance.ui.panels;
 import com.maemong.attendance.bootstrap.Bootstrap;
 import com.maemong.attendance.domain.AttendanceRecord;
 import com.maemong.attendance.ui.actions.AttendanceSaver;
+import com.maemong.attendance.ui.attendance.presenters.EntryPresenter;
 import com.maemong.attendance.ui.components.DatePicker3;
 import com.maemong.attendance.ui.components.EmployeePicker;
 import com.maemong.attendance.ui.components.TimeRangeField;
@@ -38,6 +39,7 @@ public class PanelAttendance extends JPanel {
     private final JComboBox<String> cbMemoTpl = new JComboBox<>(new String[]{"(없음)", "지각", "교육", "수습"});
     private final JTextArea taMemo = new JTextArea(3, 20);
 
+    private final EntryPresenter presenter;
     private final AttendanceSaver saver;
 
     public PanelAttendance(Bootstrap boot) {
@@ -46,6 +48,8 @@ public class PanelAttendance extends JPanel {
 
         setLayout(new BorderLayout());
         buildTopPanel();
+
+        this.presenter = new EntryPresenter(boot);
 
         // 저장 전용 서비스 주입 (JOptionPane confirm)
         this.saver = new AttendanceSaver(boot, (title, message) -> {
@@ -56,6 +60,8 @@ public class PanelAttendance extends JPanel {
             );
             return ans == JOptionPane.YES_OPTION;
         });
+
+        btnSave.addActionListener(e -> onSave());
 
         // 실시간 근무시간 미리보기
         timeRange.addPropertyChangeListener(evt -> {
@@ -139,18 +145,15 @@ public class PanelAttendance extends JPanel {
 
     private void onSave() {
         try {
-            LocalDate date = datePicker.getDate();
+            var date = datePicker.getDate();
             var emp  = employeePicker.getSelected();
-            LocalTime tin  = timeRange.getIn();
-            LocalTime tout = timeRange.getOut();
-            String memo = taMemo.getText().isBlank() ? null : taMemo.getText().trim();
+            var tin  = timeRange.getIn();
+            var tout = timeRange.getOut();
+            String memo = taMemo.getText().isBlank() ? null : taMemo.getText().trim(); // 메모 UI가 있다면
 
-            var saved = saver.save(emp, date, tin, tout, memo);
+            // ✅ Presenter 경유로 저장 & 이벤트 발행까지 일원화
+            var saved = presenter.save(emp.id, date, tin, tout, memo);
             JOptionPane.showMessageDialog(this, "저장됨 id=" + saved.id());
-
-            boot.events().fireAttendanceSaved(
-                    new AppEvents.AttendanceSavedEvent(saved.id(), saved.employeeId(), saved.workDate())
-            );
 
             if (!chkKeepAfterSave.isSelected()) {
                 resetForm();

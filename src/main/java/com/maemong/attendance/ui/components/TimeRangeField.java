@@ -1,5 +1,7 @@
 package com.maemong.attendance.ui.components;
 
+import com.maemong.attendance.util.DateTimeUtil;
+
 import javax.swing.*;
 import java.awt.*;
 import java.time.LocalTime;
@@ -66,15 +68,9 @@ public final class TimeRangeField extends JPanel {
     /** "HH:mm" 형태의 총 근무시간 문자열 반환 */
     public String getPrettyDuration() {
         try {
-            LocalTime a = getIn(), b = getOut();
-            int diff = (b.getHour()*60 + b.getMinute()) - (a.getHour()*60 + a.getMinute());
-            if (diff < 0) diff += 24*60;
-            return String.format("%02d:%02d", diff/60, diff%60);
+            return DateTimeUtil.prettyDuration(getIn(), getOut());
         } catch (Exception e) {
             return "--:--";
         }
     }
-
-    /** 출근보다 퇴근이 이르면 ‘다음날 퇴근’ 시나리오 */
-    public boolean isOvernight() { return getOut().isBefore(getIn()); }
 }

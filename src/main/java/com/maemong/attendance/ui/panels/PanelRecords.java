@@ -19,6 +19,7 @@ import java.util.*;
 import java.util.List;
 
 import com.maemong.attendance.events.AppEvents;
+import com.maemong.attendance.ui.attendance.presenters.RecordsPresenter;
 import com.maemong.attendance.ui.export.XlsxExporter;
 import com.maemong.attendance.ui.export.XlsxImporter;
 import com.maemong.attendance.ui.records.*;
@@ -48,6 +49,7 @@ public class PanelRecords extends JPanel {
     private final JButton btnSummary = new JButton("요약 보기");
     private final JLabel lbTotal = new JLabel("총 근무시간: 00:00");
 
+    private final RecordsPresenter presenter;
     private TableRowSorter<TableModel> sorter;
     private List<RowSorter.SortKey> baseSortKeys;
 
@@ -115,6 +117,7 @@ public class PanelRecords extends JPanel {
 
     public PanelRecords(Bootstrap boot) {
         this.boot = boot;
+        this.presenter = new RecordsPresenter(boot);
 
         setLayout(new BorderLayout(8, 8));
         buildTop();
@@ -352,7 +355,7 @@ public class PanelRecords extends JPanel {
         YearMonth ym = YearMonth.of(y, m);
 
         // 데이터 로드
-        List<AttendanceRecord> rows = boot.attendance().byMonth(ym);
+        List<AttendanceRecord> rows = presenter.byMonth(ym);
 
         // 일자 범위 (QueryBar 신규 콤보)
         final int dayFrom = queryBar.getDayFrom(), dayTo = queryBar.getDayTo();
@@ -503,8 +506,8 @@ public class PanelRecords extends JPanel {
         int okCount = 0;
         for (Long id : ids) {
             try {
-                if (boot.attendance().remove(id)) okCount++;
-            } catch (Exception ignore) { /* 개별 실패 무시 후 일괄 요약 */ }
+                if (presenter.remove(id)) okCount++;  // ✅
+            } catch (Exception ignore) { /* ... */ }
         }
 
         JOptionPane.showMessageDialog(this,
