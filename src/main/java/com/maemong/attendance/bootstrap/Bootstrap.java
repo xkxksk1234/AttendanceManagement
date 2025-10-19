@@ -6,6 +6,7 @@ import com.maemong.attendance.db.JdbiProvider;
 import com.maemong.attendance.db.MigrationRunner;
 import com.maemong.attendance.adapters.db.AttendanceRepositoryJdbi;
 import com.maemong.attendance.adapters.db.EmployeeRepositoryJdbi;
+import com.maemong.attendance.events.AppEvents;
 import com.maemong.attendance.ports.AttendanceRepository;
 import com.maemong.attendance.ports.EmployeeRepository;
 import com.maemong.attendance.services.AttendanceService;
@@ -21,28 +22,27 @@ import javax.sql.DataSource;
  */
 public class Bootstrap {
 	private AppConfig config;
+    private AppEvents events;
 	private Jdbi jdbi;
-
 
 	// Services
 	private EmployeeService employeeService;
 	private AttendanceService attendanceService;
 
+    public void init() {
+        this.config = ConfigLoader.load();
+        this.events = new AppEvents();
+        DataSource ds = DataSourceFactory.create(config);
+        MigrationRunner.migrate(ds);
+        this.jdbi = JdbiProvider.create(ds);
 
-	public void init() {
-		this.config = ConfigLoader.load();
-		DataSource ds = DataSourceFactory.create(config);
-		MigrationRunner.migrate(ds);
-		this.jdbi = JdbiProvider.create(ds);
+        EmployeeRepository empRepo = new EmployeeRepositoryJdbi(jdbi);
+        AttendanceRepository attRepo = new AttendanceRepositoryJdbi(jdbi);
 
+        this.employeeService = new EmployeeService(empRepo);
+        this.attendanceService = new AttendanceService(attRepo, empRepo, false);
+    }
 
-		EmployeeRepository empRepo = new EmployeeRepositoryJdbi(jdbi);
-		AttendanceRepository attRepo = new AttendanceRepositoryJdbi(jdbi);
-
-
-		this.employeeService = new EmployeeService(empRepo);
-		this.attendanceService = new AttendanceService(attRepo, empRepo);
-	}
 
 	// 외부에서 참조 가능하도록 공개한 접근자들(현재 사용처가 없으면 IDE 경고 발생할 수 있음)
 	@SuppressWarnings("unused")
@@ -53,4 +53,6 @@ public class Bootstrap {
 
 	public EmployeeService employees() { return employeeService; }
 	public AttendanceService attendance() { return attendanceService; }
+
+    public AppEvents events() { return events; }
 }

@@ -18,6 +18,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 
+import com.maemong.attendance.events.AppEvents;
 import com.maemong.attendance.ui.export.XlsxExporter;
 import com.maemong.attendance.ui.export.XlsxImporter;
 import com.maemong.attendance.ui.records.*;
@@ -28,6 +29,9 @@ public class PanelRecords extends JPanel {
     private final Map<Long, Set<LocalDate>> multiKeys = new HashMap<>();
     private static final DateTimeFormatter ISO_TIME = DateTimeFormatter.ofPattern("HH:mm");
     private static final Color HOVER_BG = new Color(240, 240, 240);
+
+    private final AppEvents.AttendanceSavedListener savedListener = this::onAttendanceSaved;
+    private boolean subscribed = false; // add/removeNotify에서 중복구독 방지
 
     // 컬럼 인덱스 상수 (모델 헤더: ID, 날짜, 사번, 이름, 출근, 퇴근, 메모)
     private static final int COL_EMP  = 2;
@@ -46,6 +50,25 @@ public class PanelRecords extends JPanel {
 
     private TableRowSorter<TableModel> sorter;
     private List<RowSorter.SortKey> baseSortKeys;
+
+    @Override public void addNotify() {
+        super.addNotify();
+        if (!subscribed) {
+            boot.events().addAttendanceSavedListener(savedListener);
+            subscribed = true;
+        }
+    }
+
+    @Override public void removeNotify() {
+        try {
+            if (subscribed) {
+                boot.events().removeAttendanceSavedListener(savedListener);
+                subscribed = false;
+            }
+        } finally {
+            super.removeNotify();
+        }
+    }
 
     /** 헤더 3회 클릭 시 기본정렬로 돌아가는 트라이-스테이트 정렬 설치 */
     private static TableRowSorter<TableModel> installTriStateSort(JTable t, List<RowSorter.SortKey> defaultKeys) {
@@ -97,6 +120,18 @@ public class PanelRecords extends JPanel {
         buildTop();
         buildTable();
         buildBottom();
+        doQuery();
+    }
+
+    private void onAttendanceSaved(AppEvents.AttendanceSavedEvent e) {
+        // 필터에 맞는 경우만 리로드하고 싶다면 아래에서 조건 분기 가능
+        SwingUtilities.invokeLater(this::reloadRespectingFilters);
+    }
+
+    // PanelRecords 내부 어딘가(메서드들 사이)에 추가
+    private void reloadRespectingFilters() {
+        // 현재 QueryBar 상태(연/월, dayFrom~dayTo, 사번 필터 등)를 반영하는
+        // doQuery()가 이미 모든 걸 처리하므로 그대로 호출
         doQuery();
     }
 
@@ -319,6 +354,9 @@ public class PanelRecords extends JPanel {
         // 데이터 로드
         List<AttendanceRecord> rows = boot.attendance().byMonth(ym);
 
+        // 일자 범위 (QueryBar 신규 콤보)
+        final int dayFrom = queryBar.getDayFrom(), dayTo = queryBar.getDayTo();
+
         // 사번 필터
         String empIdText = queryBar.getEmpIdText();
         Long filterEmpId = null;
@@ -338,6 +376,10 @@ public class PanelRecords extends JPanel {
             java.util.List<AttendanceRecord> filtered = new java.util.ArrayList<>();
             for (AttendanceRecord r : rows) {
                 if (filterEmpId != null && !filterEmpId.equals(r.employeeId())) continue;
+                LocalDate d = r.workDate();
+                if (d == null) continue;
+                int day = d.getDayOfMonth();
+                if (day < dayFrom || day > dayTo) continue;
                 filtered.add(r);
             }
             // (사번, 날짜)별 카운트
@@ -363,10 +405,15 @@ public class PanelRecords extends JPanel {
         model.setRowCount(0);
         for (AttendanceRecord r : rows) {
             if (filterEmpId != null && !filterEmpId.equals(r.employeeId())) continue;
+            LocalDate d = r.workDate();
+            if (d == null) continue;
+            int day = d.getDayOfMonth();
+            if (day < dayFrom || day > dayTo) continue;
+
             String name = nameCache.getOrDefault(r.employeeId(), "");
             String inStr  = formatTime(r.clockIn());
             String outStr = formatTime(r.clockOut());
-            model.addRow(new Object[]{ r.id(), r.workDate(), r.employeeId(), name, inStr, outStr, r.memo()==null?"":r.memo() });
+            model.addRow(new Object[]{ r.id(), d, r.employeeId(), name, inStr, outStr, r.memo()==null?"":r.memo() });
         }
 
         updateTotalHours();

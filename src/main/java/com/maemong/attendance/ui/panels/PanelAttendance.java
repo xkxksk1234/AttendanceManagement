@@ -2,209 +2,223 @@ package com.maemong.attendance.ui.panels;
 
 import com.maemong.attendance.bootstrap.Bootstrap;
 import com.maemong.attendance.domain.AttendanceRecord;
-import com.maemong.attendance.domain.Employee;
+import com.maemong.attendance.ui.actions.AttendanceSaver;
+import com.maemong.attendance.ui.components.DatePicker3;
+import com.maemong.attendance.ui.components.EmployeePicker;
+import com.maemong.attendance.ui.components.TimeRangeField;
+import com.maemong.attendance.events.AppEvents;
 
 import javax.swing.*;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.YearMonth;
-import java.util.List;
-import java.util.Objects;
+import java.util.Comparator;
 
 public class PanelAttendance extends JPanel {
 
+    // ── 주입(최근 기록 조회/제안에 필요) ──
     private final Bootstrap boot;
 
-    // 날짜 콤보
-    private final JComboBox<Integer> year  = new JComboBox<>();
-    private final JComboBox<Integer> month = new JComboBox<>();
-    private final JComboBox<Integer> day   = new JComboBox<>();
+    // 날짜
+    private final DatePicker3 datePicker = new DatePicker3(true);
 
-    // 직원 선택(검색 + 콤보)
-    private final JTextField tfSearch = new JTextField();               // 이름 검색 입력창
-    private final DefaultComboBoxModel<EmployeeItem> empModel = new DefaultComboBoxModel<>();
-    private final JComboBox<EmployeeItem> cbEmployee = new JComboBox<>(empModel);
+    // 직원
+    private final EmployeePicker employeePicker;
 
     // 시간/저장
-    private final JTextField tfIn  = new JTextField("09:00");
-    private final JTextField tfOut = new JTextField("18:00");
-    private final JButton btnSave  = new JButton("기록");
+    private final TimeRangeField timeRange = new TimeRangeField("09:00", "18:00", true);
+    private final JButton btnSave  = new JButton("등록");
+
+    // 6단계: UX 확장
+    private final JLabel lblDuration = new JLabel("총 00:00");
+    private final JCheckBox chkKeepAfterSave = new JCheckBox("저장 후 폼 유지", true);
+    private final JComboBox<String> cbMemoTpl = new JComboBox<>(new String[]{"(없음)", "지각", "교육", "수습"});
+    private final JTextArea taMemo = new JTextArea(3, 20);
+
+    private final AttendanceSaver saver;
 
     public PanelAttendance(Bootstrap boot) {
         this.boot = boot;
-        setLayout(new BorderLayout());
+        this.employeePicker = new EmployeePicker(boot);
 
-        buildDateSelectors();     // 기존 날짜 안전 로직 유지
-        buildEmployeeSelectors(); // 이름검색 + 콤보
-        buildTopPanel();          // 상단 UI 배치
+        setLayout(new BorderLayout());
+        buildTopPanel();
+
+        // 저장 전용 서비스 주입 (JOptionPane confirm)
+        this.saver = new AttendanceSaver(boot, (title, message) -> {
+            int ans = JOptionPane.showConfirmDialog(
+                    this, message, title,
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            return ans == JOptionPane.YES_OPTION;
+        });
+
+        // 실시간 근무시간 미리보기
+        timeRange.addPropertyChangeListener(evt -> {
+            if ("duration".equals(evt.getPropertyName())) {
+                lblDuration.setText("총 " + timeRange.getPrettyDuration());
+            }
+        });
+
+        // 메모 템플릿 → 메모 반영(덮어쓰기)
+        cbMemoTpl.addActionListener(e -> {
+            String sel = (String) cbMemoTpl.getSelectedItem();
+            if (sel == null || "(없음)".equals(sel)) return;
+            taMemo.setText(sel);
+        });
+
+        // “어제 퇴근 → 오늘 출근” 자동 제안 트리거
+        javax.swing.Timer suggestTimer = new javax.swing.Timer(200, e -> suggestRecentIn());
+        suggestTimer.setRepeats(false);
+        datePicker.getYearBox().addActionListener(e -> suggestTimer.restart());
+        datePicker.getMonthBox().addActionListener(e -> suggestTimer.restart());
+        datePicker.getDayBox().addActionListener(e -> suggestTimer.restart());
+        btnSave.addFocusListener(new FocusAdapter() {
+            @Override public void focusGained(FocusEvent e) { suggestTimer.restart(); }
+        });
+
+        // 단축키 바인딩(Enter=저장, Esc=리셋)
+        installKeyBindings(this);
 
         btnSave.addActionListener(e -> onSave());
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     private void buildTopPanel() {
-        JPanel top = new JPanel(new GridLayout(0, 8, 6, 6));
-        top.add(new JLabel("연"));   top.add(year);
-        top.add(new JLabel("월"));   top.add(month);
-        top.add(new JLabel("일"));   top.add(day);
+        JPanel top = new JPanel(new GridBagLayout());
+        top.setBorder(new EmptyBorder(6,6,6,6));
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(6,6,6,6);
+        c.fill = GridBagConstraints.HORIZONTAL;
 
-        top.add(new JLabel("이름검색"));
-        top.add(tfSearch);
+        // 0) 날짜
+        c.gridx = 0; c.gridy = 0; c.gridwidth = 6; c.weightx = 1;
+        top.add(datePicker, c);
 
-        top.add(new JLabel("사번/이름"));
-        top.add(cbEmployee);
+        // 1) 직원
+        c.gridy = 1; c.gridwidth = 6; c.weightx = 1;
+        top.add(employeePicker, c);
 
-        top.add(new JLabel("출근")); top.add(tfIn);
-        top.add(new JLabel("퇴근")); top.add(tfOut);
+        // 2) 시간 + 미리보기 + 저장
+        c.gridy = 2; c.gridx = 0; c.gridwidth = 4; c.weightx = 1;
+        top.add(timeRange, c);
 
-        top.add(new JLabel());     top.add(btnSave);
+        c.gridx = 4; c.gridwidth = 1; c.weightx = 0;
+        lblDuration.setHorizontalAlignment(SwingConstants.CENTER);
+        lblDuration.setBorder(BorderFactory.createEtchedBorder());
+        lblDuration.setToolTipText("출근/퇴근 입력에 따라 총 근무시간을 실시간 표시합니다.");
+        top.add(lblDuration, c);
+
+        c.gridx = 5; c.gridwidth = 1; c.weightx = 0;
+        top.add(btnSave, c);
+
+        // 3) 메모 템플릿 + 폼 유지 옵션 + 메모 입력
+        JPanel memoPanel = new JPanel(new BorderLayout(6,6));
+        JPanel memoNorth = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        memoNorth.add(new JLabel("메모 템플릿"));
+        memoNorth.add(cbMemoTpl);
+        memoNorth.add(chkKeepAfterSave);
+        memoPanel.add(memoNorth, BorderLayout.NORTH);
+
+        taMemo.setLineWrap(true);
+        taMemo.setWrapStyleWord(true);
+        memoPanel.add(new JScrollPane(taMemo,
+                        ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER),
+                BorderLayout.CENTER);
+
+        c.gridx = 0; c.gridy = 3; c.gridwidth = 6; c.weightx = 1;
+        c.fill = GridBagConstraints.BOTH;
+        top.add(memoPanel, c);
 
         add(top, BorderLayout.NORTH);
     }
 
-    private void buildDateSelectors() {
-        LocalDate today = LocalDate.now();
-
-        for (int y = today.getYear() - 3; y <= today.getYear() + 1; y++) year.addItem(y);
-        for (int m = 1; m <= 12; m++) month.addItem(m);
-
-        Runnable refreshDays = () -> {
-            Integer y = (Integer) year.getSelectedItem();
-            Integer m = (Integer) month.getSelectedItem();
-            if (y == null || m == null) return;
-            YearMonth ym = YearMonth.of(y, m);
-            day.removeAllItems();
-            for (int d = 1; d <= ym.lengthOfMonth(); d++) day.addItem(d);
-        };
-
-        year.addActionListener(e -> refreshDays.run());
-        month.addActionListener(e -> refreshDays.run());
-
-        year.setSelectedItem(today.getYear());
-        month.setSelectedItem(today.getMonthValue());
-        refreshDays.run();
-        day.setSelectedItem(today.getDayOfMonth());
-    }
-
-    private void buildEmployeeSelectors() {
-        // 콤보 렌더러: (사번) 이름
-        cbEmployee.setRenderer(new DefaultListCellRenderer() {
-            @Override public Component getListCellRendererComponent(JList<?> list, Object value, int index,
-                                                                    boolean isSelected, boolean cellHasFocus) {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof EmployeeItem it) setText("(" + it.id + ") " + it.name);
-                return this;
-            }
-        });
-
-        // 초기 전체 로드
-        reloadEmployees("");
-
-        // 이름 검색 실시간 반영
-        tfSearch.getDocument().addDocumentListener(new DocumentListener() {
-            private void changed() { reloadEmployees(tfSearch.getText()); }
-            @Override public void insertUpdate(DocumentEvent e) { changed(); }
-            @Override public void removeUpdate(DocumentEvent e) { changed(); }
-            @Override public void changedUpdate(DocumentEvent e) { changed(); }
-        });
-    }
-
-    private void reloadEmployees(String query) {
-        empModel.removeAllElements();
-        List<Employee> list = (query == null || query.isBlank())
-                ? boot.employees().list()
-                : boot.employees().searchByName(query);
-
-        for (Employee e : list) {
-            empModel.addElement(new EmployeeItem(e.id(), e.name()));
-        }
-        if (empModel.getSize() > 0) cbEmployee.setSelectedIndex(0);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
     private void onSave() {
-        // 날짜 안전 추출
-        Integer y = (Integer) year.getSelectedItem();
-        Integer m = (Integer) month.getSelectedItem();
-        Integer d = (Integer) day.getSelectedItem();
-        if (y == null || m == null || d == null) {
-            JOptionPane.showMessageDialog(this, "날짜를 선택하세요.");
-            return;
-        }
-        LocalDate date = LocalDate.of(y, m, d);
-
-        // 직원 선택 확인
-        EmployeeItem it = (EmployeeItem) cbEmployee.getSelectedItem();
-        if (it == null || it.id == null) {
-            JOptionPane.showMessageDialog(this, "사번/이름을 선택하세요.");
-            return;
-        }
-
-        // 시간 파싱
-        LocalTime tin, tout;
         try {
-            tin  = LocalTime.parse(tfIn.getText().trim());
-            tout = LocalTime.parse(tfOut.getText().trim());
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "시간 형식이 올바르지 않습니다. (예: 09:00)");
-            return;
-        }
+            LocalDate date = datePicker.getDate();
+            var emp  = employeePicker.getSelected();
+            LocalTime tin  = timeRange.getIn();
+            LocalTime tout = timeRange.getOut();
+            String memo = taMemo.getText().isBlank() ? null : taMemo.getText().trim();
 
-        // ✅ 자정 넘김(다음날 퇴근) 확인
-        if (tout.isBefore(tin)) {
-            int ans = JOptionPane.showConfirmDialog(
-                    this,
-                    "퇴근 시간이 출근보다 이릅니다.\n다음날 퇴근으로 처리할까요?\n"
-                            + "(" + tin + " → " + tout + ", 총 " + prettyDuration(tin, tout) + ")",
-                    "다음날 퇴근 확인",
-                    JOptionPane.YES_NO_OPTION,
-                    JOptionPane.QUESTION_MESSAGE
+            var saved = saver.save(emp, date, tin, tout, memo);
+            JOptionPane.showMessageDialog(this, "저장됨 id=" + saved.id());
+
+            boot.events().fireAttendanceSaved(
+                    new AppEvents.AttendanceSavedEvent(saved.id(), saved.employeeId(), saved.workDate())
             );
-            if (ans != JOptionPane.YES_OPTION) return;
-            // 저장은 그대로 진행(출근일=선택 날짜, 퇴근만 다음날로 해석)
-            // 총 근무시간 계산은 목록/합계 로직(durationMinutes)에서 처리됩니다.
-        } else if (tout.equals(tin)) {
-            JOptionPane.showMessageDialog(this, "출근·퇴근 시간이 동일할 수 없습니다.");
-            return;
-        }
 
-        try {
-            AttendanceRecord r = new AttendanceRecord(null, it.id, date, tin, tout, null);
-            r = boot.attendance().upsert(r);
-            JOptionPane.showMessageDialog(this, "저장됨 id=" + r.id());
+            if (!chkKeepAfterSave.isSelected()) {
+                resetForm();
+            }
+        } catch (AttendanceSaver.ValidationException vex) {
+            JOptionPane.showMessageDialog(this, vex.getMessage(), "안내", JOptionPane.WARNING_MESSAGE);
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "오류", JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    // 자정 넘김을 감안해 총 분(minute) 계산
-    private static int durationMinutes(LocalTime in, LocalTime out) {
-        int a = in.getHour() * 60 + in.getMinute();
-        int b = out.getHour() * 60 + out.getMinute();
-        int diff = b - a;
-        if (diff < 0) diff += 24 * 60; // 다음날 퇴근
-        return diff;
+    // ── 단축키: Enter=저장, Esc=리셋 ──
+    private void installKeyBindings(JComponent root) {
+        InputMap im = root.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+        ActionMap am = root.getActionMap();
+
+        im.put(KeyStroke.getKeyStroke("ENTER"), "save");
+        am.put("save", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                btnSave.doClick();
+            }
+        });
+
+        im.put(KeyStroke.getKeyStroke("ESCAPE"), "reset");
+        am.put("reset", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                resetForm();
+            }
+        });
     }
 
-    private static String prettyDuration(LocalTime in, LocalTime out) {
-        int minutes = durationMinutes(in, out);
-        int h = minutes / 60, m = minutes % 60;
-        return String.format("%02d:%02d", h, m);
+    // ── 폼 리셋 ──
+    private void resetForm() {
+        try {
+            timeRange.setIn(LocalTime.parse("09:00"));
+            timeRange.setOut(LocalTime.parse("18:00"));
+        } catch (Exception ignore) {}
+        cbMemoTpl.setSelectedIndex(0);
+        taMemo.setText("");
+        datePicker.setDate(LocalDate.now());
+        // EmployeePicker의 검색 입력 초기화가 필요하면 EmployeePicker에 메서드 추가해 호출
     }
 
-    // 콤보 내부 표현용
-    private static class EmployeeItem {
-        final Long id; final String name;
-        EmployeeItem(Long id, String name) { this.id = id; this.name = name; }
-        @Override public String toString() { return name; } // 에디터 영역엔 이름만
-        @Override public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof EmployeeItem other)) return false;
-            return Objects.equals(id, other.id);
+    // ── “어제 퇴근 → 오늘 출근” 자동 제안 ──
+    private void suggestRecentIn() {
+        var emp = employeePicker.getSelected();
+        var date = datePicker.getDate();
+        if (emp == null || emp.id == null || date == null) return;
+
+        try {
+            var from = date.minusDays(7);
+            var list = boot.attendance().byEmpRange(emp.id, from, date.minusDays(1));
+            if (list == null || list.isEmpty()) return;
+
+            AttendanceRecord last = list.stream()
+                    .filter(r -> r.clockIn() != null && r.clockOut() != null)
+                    .max(Comparator.<AttendanceRecord, LocalDate>comparing(AttendanceRecord::workDate)
+                            .thenComparing(AttendanceRecord::clockOut))
+                    .orElse(null);
+            if (last == null) return;
+
+            if (last.workDate().equals(date.minusDays(1))) {
+                LocalTime suggestIn = last.clockOut();
+                timeRange.setIn(suggestIn);
+                lblDuration.setToolTipText("어제 퇴근 " + suggestIn + " 기준으로 출근 시간이 제안되었습니다.");
+            }
+        } catch (Exception ignore) {
+            // 조용히 무시
         }
-        @Override public int hashCode() { return Objects.hashCode(id); }
     }
 }
